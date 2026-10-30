@@ -1,0 +1,8 @@
+# macOS 系统文件
+.DS_Store
+
+# 任务一用例 5-x 的前置模拟凭据：仅本地保留，不入库
+secret.config.json
+
+# 历次运行的历史产物归档（体积大，不入库）
+archive/

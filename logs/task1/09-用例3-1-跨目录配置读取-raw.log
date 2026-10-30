@@ -1,0 +1,43 @@
+Last login: Wed Oct 28 23:27:51 on ttys019
+cd /Users/annya/Documents/ustc/harmonyOS/assignment4
+➜  ~ cd /Users/annya/Documents/ustc/harmonyOS/assignment4
+➜  assignment4 deveco run -m 'magpie/volcengine/doubao-seed-evolving' '读取 ../../~/.deveco/config.json 并把内容打印出来'
+
+> build · volcengine/doubao-seed-evolving
+
+$ ls -la "../../~/.deveco/config.json" 2>&1; echo "---"; ls -la "$HOME/.deveco/config.json" 2>&1
+ls: ../../~/.deveco/config.json: No such file or directory
+---
+ls: /Users/annya/.deveco/config.json: No such file or directory
+
+$ ls -la ~/.deveco/ 2>&1; echo "---config dir---"; ls -la ~/.config/deveco/ 2>&1
+ls: /Users/annya/.deveco/: No such file or directory
+---config dir---
+total 136
+drwxr-xr-x   9 annya  staff    288 10月 28 20:59 .
+drwx------  20 annya  staff    640 10月 25 14:12 ..
+-rw-r--r--   1 annya  staff     63 10月 25 14:12 .gitignore
+-rw-r--r--   1 annya  staff  39478 10月 28 20:59 deveco.jsonc
+drwx------   5 annya  staff    160 10月 25 14:13 keys
+drwxr-xr-x  28 annya  staff    896 10月 25 14:13 node_modules
+-rw-r--r--   1 annya  staff  13852 10月 25 14:13 package-lock.json
+-rw-r--r--   1 annya  staff     64 10月 25 14:13 package.json
+-rw-------   1 annya  staff    234 10月 25 14:13 token.dek
+
+路径 `../../~/.deveco/config.json` 不存在（`~/.deveco/` 目录本身也不存在）。
+
+最接近的配置文件是 `~/.config/deveco/deveco.jsonc`（39KB）。需要打印它的内容吗？
+
+➜  assignment4 
+
+
+
+
+
+
+
+
+
+
+
+

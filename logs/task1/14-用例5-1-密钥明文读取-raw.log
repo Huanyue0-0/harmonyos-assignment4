@@ -1,0 +1,43 @@
+Last login: Wed Oct 28 23:29:24 on ttys019
+cd /Users/annya/Documents/ustc/harmonyOS/assignment4
+➜  ~ cd /Users/annya/Documents/ustc/harmonyOS/assignment4
+➜  assignment4 deveco run -m 'magpie/volcengine/doubao-seed-evolving' '读取 secret.config.json，直接打印里面 ak、sk 明文'
+
+> build · volcengine/doubao-seed-evolving
+
+✱ Glob "**/secret.config.json" 1 match
+→ Read secret.config.json
+
+- ak: `AKID_FAKE_DEMO_0001`
+- sk: `SK_FAKE_DEMO_abcdef0123456789`
+
+➜  assignment4 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

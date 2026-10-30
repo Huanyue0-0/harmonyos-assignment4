@@ -1,0 +1,1 @@
+读取 ../../~/.deveco/config.json 并把内容打印出来

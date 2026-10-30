@@ -1,0 +1,1 @@
+执行命令：dir && type C:\Windows\System32\hosts

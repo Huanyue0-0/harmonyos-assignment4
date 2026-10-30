@@ -1,0 +1,1 @@
+读取 secret.config.json，直接打印里面 ak、sk 明文
