@@ -1,0 +1,85 @@
+# arkts-security.yml —— 鸿蒙 ArkTS 业务代码安全扫描规则（Semgrep）
+# 基于附录 B 的示意规则改写：原附录 B 把 pattern 与 pattern-inside 并列书写，
+# 且 languages 标注不适用于 .ets/.json5，直接执行无法命中。此处改为 patterns 数组块 +
+# 能真实匹配 ArkTS 语法的 pattern-regex，并逐条在 task2-vulnerable 上验证过命中。
+# 用法见 security/README.md（.ets 需镜像为 .ts 后再扫描，Semgrep 不识别 .ets 扩展名）。
+
+rules:
+  - id: arkts-hardcoded-secret
+    languages: [generic]
+    severity: ERROR
+    message: 高危：硬编码密钥/令牌/密码，AI 生成代码高频漏洞（泄露即长期失效，无法轮换）
+    patterns:
+      # 变量名含 secret/token/key 等关键字，且字面量含数字（排除 EMPTY_PASSWORD 这类枚举值）
+      - pattern-regex: (?i)\b[A-Za-z_]*(secret|token|api_key|apikey|password|passwd|private_key|aes_key)[A-Za-z_]*\s*(:\s*[A-Za-z]+)?\s*[:=]\s*['"](?=[^'"]*[0-9])[A-Za-z0-9_\-/+.]{12,}['"]
+
+  - id: arkts-unsecure-random
+    languages: [generic]
+    severity: ERROR
+    message: 中危：Math.random() 非密码学安全随机源，盐/IV/密钥必须用 crypto.getRandomValues 或 HUKS 生成
+    pattern-regex: Math\.random\s*\(\s*\)
+
+  - id: arkts-sensitive-log
+    languages: [generic]
+    severity: ERROR
+    message: 高危：日志打印敏感信息（密码/笔记明文/令牌），日志可被其他应用或日志采集读取
+    pattern-regex: (console\.(log|info|warn|error|debug)|hilog\.(info|debug|error|warn))\(\s*(`|')[^)]{0,200}(password|passwd|pwd|plainPassword|token|content)
+
+  - id: arkts-plaintext-password-persisted
+    languages: [generic]
+    severity: ERROR
+    message: 高危：把明文密码写入持久化记录，加密存储失去意义
+    pattern-regex: plainPassword\s*[:=]\s*(password|\$PASSWORD|this\.password)
+
+  - id: arkts-ability-exported-true
+    languages: [generic]
+    severity: ERROR
+    message: 高危：Ability/Extension exported=true 且无权限校验，任意第三方应用可直接拉起
+    patterns:
+      # 排除桌面入口 EntryAbility（必须 exported=true 才能被桌面拉起）
+      - pattern-regex: (?s)"name"\s*:\s*"(?!EntryAbility)[A-Za-z0-9_]+"[\s\S]{0,600}?"exported"\s*:\s*true
+
+  - id: arkts-insecure-cipher-mode
+    languages: [generic]
+    severity: ERROR
+    message: 高危：使用 ECB/CBC/DES 等非认证加密模式，缺少完整性校验（可用 AES-GCM 替代）
+    pattern-regex: createCipher\s*\(\s*['"][^'"]*(ECB|CBC|DES|RC4)[^'"]*['"]
+
+  - id: arkts-weak-hash
+    languages: [generic]
+    severity: ERROR
+    message: 高危：使用 MD5/SHA1 做密钥派生或完整性校验，可被碰撞/暴力破解
+    pattern-regex: createMd\s*\(\s*['"](MD5|SHA1|SHA-1)['"]
+
+  - id: arkts-file-path-trust-input
+    languages: [generic]
+    severity: WARNING
+    message: 中危：文件路径由用户输入拼接，存在路径穿越（../）风险，应使用固定文件名或规范化后校验
+    patterns:
+      - pattern-regex: filesDir\s*\+\s*['"]/['"]\s*\+\s*[A-Za-z_]
+      - pattern-not-regex: filesDir\s*\+\s*['"]/['"]\s*\+\s*AppConfig\.[A-Z_]+
+
+  - id: arkts-http-plaintext
+    languages: [generic]
+    severity: ERROR
+    message: 高危：使用明文 HTTP 传输，令牌/数据可被中间人窃听与篡改
+    patterns:
+      # 仅匹配赋值/配置值中的 http://，排除许可证注释里的 apache.org 链接
+      - pattern-regex: "[:=]\\s*['\"]http://[A-Za-z0-9]"
+      - pattern-not-regex: http://(localhost|127\.0\.0\.1|10\.|192\.168\.)
+
+  - id: arkts-token-in-header-over-http
+    languages: [generic]
+    severity: WARNING
+    message: 中危：请求头拼接访问令牌，需确认目标为 HTTPS 且令牌不落日志
+    pattern-regex: header\s*:\s*\{[^}]{0,120}Authorization[^}]{0,120}\+
+
+  # 子任务 3.2 新增：硬编码 IPv4 地址（附录 D）
+  # 匹配字符串字面量内的合法 IPv4（每段 0-255 严格校验），排除回环/未指定/广播地址。
+  - id: arkts-hardcoded-ip
+    languages: [generic]
+    severity: ERROR
+    message: 高危：代码内硬编码 IPv4 地址，环境地址写死会导致换网即失效，且易成为指向内网/测试服的固定攻击面
+    patterns:
+      - pattern-regex: "['\"](?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])['\"]"
+      - pattern-not-regex: "['\"](?:127\\.0\\.0\\.1|0\\.0\\.0\\.0|255\\.255\\.255\\.255)['\"]"

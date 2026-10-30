@@ -73,3 +73,28 @@ bash scripts/run_task2.sh                          # 在真实 Terminal 里跑�
 ```
 
 结果摘要：Code Linter 仅命中 MD5 一条（1/10 类漏洞），Semgrep 命中 13 处（10/10 类），另人工审计补出 4 项漏报；修复后双扫描归零，`assembleHap` 构建通过。
+
+---
+
+# 任务三 · hvigor CI 安全门禁（选做）
+
+```
+scripts/security-gate/security-gate.ts    # securityScan 任务：Code Linter + Semgrep，高危即 throw
+scripts/test_ip_rule.sh                   # 3.2 新规则单独验证（硬编码 IPv4）
+task2/security/rules/arkts-security.yml   # 新增第 11 条规则 arkts-hardcoded-ip
+task2/security/rules/tests/hardcoded-ip-sample.ets
+scripts/run_task3.sh                      # 采集 screenshots/task3/ 与 logs/task3/
+```
+
+两个工程的 `hvigorfile.ts` 均挂载该插件；`task2-vulnerable` 内保留同一份规则副本。
+
+```bash
+bash scripts/test_ip_rule.sh                                    # 命中 1 处（样例第 2 行）
+cd task2-vulnerable && hvigorw securityScan                     # 阻断：12 个高危 → BUILD FAILED（退出码 255）
+cd task2 && hvigorw securityScan                                # 放行：BUILD SUCCESSFUL（退出码 0）
+```
+
+需设置 `DEVECO_SDK_HOME=/Applications/DevEco-Studio.app/Contents/sdk`；Semgrep 默认取 `~/.local/bin/semgrep`（可用 `SEMGREP` 覆盖）。
+
+结果摘要：门禁把 Code Linter 的 1 个高危与 Semgrep 的 11 个 ERROR 合并为 12 个阻断项，弥补 Code Linter 9/10 类漏报；修复后归零放行。门禁属构建期静态检查，无法覆盖运行时漏洞与动态拼接的地址。
+
