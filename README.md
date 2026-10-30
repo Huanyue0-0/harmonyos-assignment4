@@ -50,3 +50,26 @@ DEVECO_MODEL=magpie/volcengine/doubao-seed-evolving bash scripts/run_task1.sh   
 
 - 早期两轮的截图因脚本重跑时被 `rm -rf` 清掉，无法恢复（本机无 Time Machine / APFS 本地快照）；现已在脚本中加入 `archive/` 归档，并重跑得到当前这套完整证据。
 - `SHOT_MODE=window` 可改为只截终端窗口；`KEEP_WINDOW=1` 保留窗口。
+
+---
+
+# 任务二 · 鸿蒙 ArkTS 代码静态安全扫描与修复复测
+
+```
+task2/                    # 修复后工程（可构建）
+├── security/rules/arkts-security.yml   # 改写后的 Semgrep 规则（10 条）
+├── security/scan.sh                    # 一键双扫描：semgrep | linter | all
+└── security/reports/                   # 前后扫描报告 + fix.diff
+task2-vulnerable/         # 漏洞原始版本（同一工程的注入版）
+docs/task2_报告.md         # 任务二完整报告
+screenshots/task2/        # 02～07：扫描前后 / 构建 / 运行
+logs/task2/               # 终端原始输出
+```
+
+```bash
+bash task2/security/scan.sh all task2-vulnerable   # 修复前：Semgrep 13 处 + Code Linter 1 处
+bash task2/security/scan.sh all task2              # 修复后：两者均 0
+bash scripts/run_task2.sh                          # 在真实 Terminal 里跑上述命令并截图
+```
+
+结果摘要：Code Linter 仅命中 MD5 一条（1/10 类漏洞），Semgrep 命中 13 处（10/10 类），另人工审计补出 4 项漏报；修复后双扫描归零，`assembleHap` 构建通过。

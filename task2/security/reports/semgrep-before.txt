@@ -1,0 +1,85 @@
+                    
+                    
+┌──────────────────┐
+│ 13 Code Findings │
+└──────────────────┘
+                                      
+    common/AppConfig.ts
+   ❯❯❱ task2.security.rules.arkts-http-plaintext
+          ❰❰ Blocking ❱❱
+          高危：使用明文 HTTP 传输，令牌/数据可被中间人窃听与篡改
+                                                                 
+            7┆ static readonly SAMPLE_URL: string = 'http://httpbin.org/get';
+   
+   ❯❯❱ task2.security.rules.arkts-hardcoded-secret
+          ❰❰ Blocking ❱❱
+          高危：硬编码密钥/令牌/密码，AI 生成代码高频漏洞（泄露即长期失效，无法轮换）
+                                                                                     
+            9┆ static readonly SAMPLE_API_TOKEN: string = 'sk-live-7d91f2c3a8e4b5d6e0f1a2b3c4d5';
+            ⋮┆----------------------------------------
+           11┆ static readonly FIXED_AES_KEY_HEX: string = '00112233445566778899aabbccddeeff';
+                               
+    module.json5
+   ❯❯❱ task2.security.rules.arkts-ability-exported-true
+          ❰❰ Blocking ❱❱
+          高危：Ability/Extension exported=true 且无权限校验，任意第三方应用可直接拉起
+                                                                                      
+           40┆ "name": "NoteDetailAbility",
+           41┆ "srcEntry": "./ets/entryability/NoteDetailAbility.ets",
+           42┆ "description": "$string:NoteDetailAbility_desc",
+           43┆ "icon": "$media:layered_image",
+           44┆ "label": "$string:NoteDetailAbility_label",
+           45┆ "startWindowIcon": "$media:startIcon",
+           46┆ "startWindowBackground": "$color:start_window_background",
+           47┆ "exported": true
+                                           
+    service/CryptoService.ts
+   ❯❯❱ task2.security.rules.arkts-insecure-cipher-mode
+          ❰❰ Blocking ❱❱
+          高危：使用 ECB/CBC/DES 等非认证加密模式，缺少完整性校验（可用 AES-GCM 替代）
+                                                                                      
+           46┆ const cipher: cryptoFramework.Cipher = cryptoFramework.createCipher('AES128|CBC|PKCS7');
+            ⋮┆----------------------------------------
+           82┆ const cipher: cryptoFramework.Cipher = cryptoFramework.createCipher('AES128|CBC|PKCS7');
+   
+   ❯❯❱ task2.security.rules.arkts-unsecure-random
+          ❰❰ Blocking ❱❱
+          中危：Math.random() 非密码学安全随机源，盐/IV/密钥必须用 crypto.getRandomValues 或 HUKS 生成
+                                                                                                      
+          108┆ bytes[i] = Math.floor(Math.random() * 256);
+   
+   ❯❯❱ task2.security.rules.arkts-weak-hash
+          ❰❰ Blocking ❱❱
+          高危：使用 MD5/SHA1 做密钥派生或完整性校验，可被碰撞/暴力破解
+                                                                       
+          115┆ const md: cryptoFramework.Md = cryptoFramework.createMd('MD5');
+   
+   ❯❯❱ task2.security.rules.arkts-plaintext-password-persisted
+          ❰❰ Blocking ❱❱
+          高危：把明文密码写入持久化记录，加密存储失去意义
+                                                          
+          140┆ plainPassword: password
+                                         
+    service/FileService.ts
+    ❯❱ task2.security.rules.arkts-file-path-trust-input
+          ❰❰ Blocking ❱❱
+          中危：文件路径由用户输入拼接，存在路径穿越（../）风险，应使用固定文件名或规范化后校验
+                                                                                               
+           28┆ return context.filesDir + '/' + title + '.json';
+                                            
+    service/NetworkService.ts
+    ❯❱ task2.security.rules.arkts-token-in-header-over-http
+          ❰❰ Blocking ❱❱
+          中危：请求头拼接访问令牌，需确认目标为 HTTPS 且令牌不落日志
+                                                                     
+           27┆ header: { 'Authorization': 'Bearer ' + AppConfig.SAMPLE_API_TOKEN },
+                                             
+    viewmodel/NoteViewModel.ts
+   ❯❯❱ task2.security.rules.arkts-sensitive-log
+          ❰❰ Blocking ❱❱
+          高危：日志打印敏感信息（密码/笔记明文/令牌），日志可被其他应用或日志采集读取
+                                                                                      
+           48┆ console.log(`save note ok, title=${title}, password=${password}, content=${content}`);
+            ⋮┆----------------------------------------
+           79┆ console.log(`load note ok, password=${password}, content=${content}`);
+

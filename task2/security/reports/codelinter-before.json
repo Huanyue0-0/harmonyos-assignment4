@@ -1,0 +1,25 @@
+{
+ "tool": "DevEco Code Linter (@ohos/security)",
+ "phase": "before-fix",
+ "defects": [
+  {
+   "defects": [
+    {
+     "reportLine": 115,
+     "reportColumn": 61,
+     "description": "Use unsafe hash algorithm.",
+     "severity": 2,
+     "ruleId": "@security/no-unsafe-hash",
+     "mergeKey": "/Users/annya/Documents/ustc/harmonyOS/assignment4/task2/entry/src/main/ets/service/CryptoService.ets%115%61%66%@security/no-unsafe-hash%Use unsafe hash algorithm.%",
+     "category": "",
+     "ruleDocPath": "docs/no-unsafe-hash.md",
+     "fixable": true,
+     "fixKey": "115%61%66%@security/no-unsafe-hash%",
+     "engineName": "eslintAgent",
+     "showIgnoreIcon": true
+    }
+   ],
+   "filePath": "/Users/annya/Documents/ustc/harmonyOS/assignment4/task2/entry/src/main/ets/service/CryptoService.ets"
+  }
+ ]
+}

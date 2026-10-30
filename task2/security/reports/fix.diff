@@ -1,0 +1,434 @@
+--- a/entry/src/main/ets/common/AppConfig.ets
++++ b/entry/src/main/ets/common/AppConfig.ets
+@@ -3,12 +3,8 @@
+  * 供 NetworkService / FileService / CryptoService 统一引用。
+  */
+ export class AppConfig {
+-  /** 网络示例接口地址 */
+-  static readonly SAMPLE_URL: string = 'http://httpbin.org/get';
+-  /** 示例接口访问令牌（服务端联调时填入） */
+-  static readonly SAMPLE_API_TOKEN: string = 'sk-live-7d91f2c3a8e4b5d6e0f1a2b3c4d5';
+-  /** AES 加密使用的固定密钥（十六进制，16 字节） */
+-  static readonly FIXED_AES_KEY_HEX: string = '00112233445566778899aabbccddeeff';
++  /** 网络示例接口地址（HTTPS GET，请求不携带任何用户数据） */
++  static readonly SAMPLE_URL: string = 'https://httpbin.org/get';
+   /** 笔记沙箱文件名（固定文件名，用户输入绝不参与路径拼接） */
+   static readonly NOTE_FILE_NAME: string = 'encrypted_note.json';
+   /** PBKDF2 密钥派生迭代次数（业界常规安全值） */
+--- a/entry/src/main/ets/model/NoteModels.ets
++++ b/entry/src/main/ets/model/NoteModels.ets
+@@ -6,9 +6,9 @@
+ /** 记录版本号（前向兼容标识，≠1 视为损坏） */
+ export const NOTE_RECORD_VERSION: number = 1;
+ /** 密钥派生算法标识（审计与解密前置校验用） */
+-export const KDF_ALG_NAME: string = 'MD5';
+-/** 加密算法标识 */
+-export const CIPHER_ALG_NAME: string = 'AES128-CBC';
++export const KDF_ALG_NAME: string = 'PBKDF2-SHA256';
++/** 认证加密算法标识 */
++export const CIPHER_ALG_NAME: string = 'AES256-GCM';
+ /** PBKDF2 迭代次数上限（防篡改文件构造超大迭代次数导致长时间计算） */
+ export const MAX_PBKDF2_ITERATIONS: number = 1000000;
+ 
+@@ -52,7 +52,6 @@
+   tagB64: string;
+   cipherB64: string;
+   title: string;
+-  plainPassword: string;
+ }
+ 
+ /** 已校验的持久化记录（结构上保证字段齐全且取值合法） */
+@@ -67,12 +66,10 @@
+   ivB64: string;
+   /** base64(GCM authTag)，解码后须为 AppConfig.TAG_LEN 字节 */
+   tagB64: string;
+-  /** base64(密文)，非空 */
++  /** base64(密文，不含 authTag)，非空 */
+   cipherB64: string;
+-  /** 笔记标题 */
++  /** 明文标题（需求仅要求正文加密；标题不含敏感信息时允许明文保存） */
+   title: string;
+-  /** 保存时使用的密码（用于读取时校验） */
+-  plainPassword: string;
+ }
+ 
+ /** 加密结果（内存二进制，仅在 service 层内部流转，不持久化、不落日志） */
+@@ -147,7 +144,7 @@
+   if (typeof raw.ivB64 !== 'string' || raw.ivB64.length === 0) {
+     return null;
+   }
+-  if (typeof raw.tagB64 !== 'string') {
++  if (typeof raw.tagB64 !== 'string' || raw.tagB64.length === 0) {
+     return null;
+   }
+   if (typeof raw.cipherB64 !== 'string' || raw.cipherB64.length === 0) {
+@@ -156,9 +153,6 @@
+   if (typeof raw.title !== 'string') {
+     return null;
+   }
+-  if (typeof raw.plainPassword !== 'string') {
+-    return null;
+-  }
+   const record: EncryptedNoteRecord = {
+     version: raw.version,
+     kdfAlg: raw.kdfAlg,
+@@ -168,8 +162,7 @@
+     ivB64: raw.ivB64,
+     tagB64: raw.tagB64,
+     cipherB64: raw.cipherB64,
+-    title: raw.title,
+-    plainPassword: raw.plainPassword
++    title: raw.title
+   };
+   return record;
+ }
+--- a/entry/src/main/ets/service/CryptoService.ets
++++ b/entry/src/main/ets/service/CryptoService.ets
+@@ -14,49 +14,66 @@
+ } from '../model/NoteModels';
+ 
+ /**
+- * 加密服务：
+- * - 密钥：由用户密码经 MD5 计算后取前 16 字节作为 AES-128 密钥；
+- * - 加密：AES-128-CBC + PKCS7 填充；
+- * - 盐与 IV 由随机数生成并随记录持久化。
++ * 加密服务（官方 cryptoFramework 实现）：
++ * - 密钥派生：PBKDF2|SHA256（盐为 CSRNG 生成的 16 字节，迭代 10000 次，派生 32 字节密钥）；
++ * - 认证加密：AES-256-GCM（IV 为 CSRNG 生成的 12 字节）；
++ * - 安全基线：密码/派生密钥/明文正文绝不写入日志或持久化记录。
+  */
+ export class CryptoService {
+   private static readonly textEncoder: util.TextEncoder = new util.TextEncoder();
+   private static readonly base64Helper: util.Base64Helper = new util.Base64Helper();
+ 
+   /**
+-   * 使用密码对正文进行加密。
+-   * @param password 用户输入的加密密码
++   * 使用密码对正文进行认证加密。
++   * @param password 用户输入的加密密码（仅用于派生密钥，不做任何持久化/日志）
+    * @param plainText 笔记正文明文
+-   * @returns 加密信封（盐/IV/密文，均为内存二进制）
++   * @returns 加密信封（盐/IV/认证标签/密文，均为内存二进制）
++   * @throws NoteError 密码为空（EMPTY_PASSWORD）或正文为空（EMPTY_CONTENT）
+    */
+   static async encryptContent(password: string, plainText: string): Promise<CryptoEnvelope> {
++    // 前置校验（页面已校验，此处为服务层防御性兜底）
+     if (password.length === 0) {
+       throw new NoteError(NoteErrorCode.EMPTY_PASSWORD, '请输入密码');
+     }
+     if (plainText.length === 0) {
+       throw new NoteError(NoteErrorCode.EMPTY_CONTENT, '请输入笔记正文');
+     }
+-    // 1. 生成盐与 IV
++    // 1. 密码学安全随机数生成盐与 IV（每次保存均全新生成）
+     const salt: Uint8Array = CryptoService.randomBytes(AppConfig.SALT_LEN);
+-    const iv: Uint8Array = CryptoService.randomBytes(16);
+-    // 2. 由密码派生 AES-128 密钥
+-    const keyBytes: Uint8Array = await CryptoService.deriveKey(password);
+-    const symKey: cryptoFramework.SymKey = await CryptoService.convertToSymKey(keyBytes);
+-    // 3. AES-128-CBC 加密
+-    const cipher: cryptoFramework.Cipher = cryptoFramework.createCipher('AES128|CBC|PKCS7');
+-    const encryptParams: cryptoFramework.IvParamsSpec = {
+-      algName: 'IvParamsSpec',
+-      iv: { data: iv }
++    const iv: Uint8Array = CryptoService.randomBytes(AppConfig.IV_LEN);
++    // 2. PBKDF2|SHA256 派生 32 字节密钥
++    const derivedKey: Uint8Array =
++      await CryptoService.deriveKey(password, salt, AppConfig.PBKDF2_ITERATIONS);
++    // 3. AES-256-GCM 加密（GCM 认证加密，附带认证标签）
++    const symKey: cryptoFramework.SymKey = await CryptoService.convertToSymKey(derivedKey);
++    const cipher: cryptoFramework.Cipher = cryptoFramework.createCipher('AES256|GCM|NoPadding');
++    const encryptParams: cryptoFramework.GcmParamsSpec = {
++      algName: 'GcmParamsSpec',
++      iv: { data: iv },
++      aad: { data: new Uint8Array() }, // 不使用附加认证数据
++      // 加密时 authTag 字段不参与运算：标签从 doFinal 输出末尾 16 字节提取，此处仅传入占位值
++      authTag: { data: new Uint8Array(AppConfig.TAG_LEN) }
+     };
+     await cipher.init(cryptoFramework.CryptoMode.ENCRYPT_MODE, symKey, encryptParams);
+     const plainBytes: Uint8Array = CryptoService.textEncoder.encodeInto(plainText);
+     const output: cryptoFramework.DataBlob = await cipher.doFinal({ data: plainBytes });
+-    return new CryptoEnvelope(salt, iv, new Uint8Array(), output.data);
++    const outLen: number = output.data.length;
++    if (outLen <= AppConfig.TAG_LEN) {
++      // 正文非空时密文至少 1 字节 + 标签 16 字节；走到此处说明内部状态异常
++      throw new NoteError(NoteErrorCode.EMPTY_CONTENT, '加密输出异常，请重试');
++    }
++    // 4. doFinal 输出末尾 16 字节为 GCM 认证标签，与密文分离保存
++    const cipherBytes: Uint8Array = output.data.slice(0, outLen - AppConfig.TAG_LEN);
++    const tag: Uint8Array = output.data.slice(outLen - AppConfig.TAG_LEN);
++    return new CryptoEnvelope(salt, iv, tag, cipherBytes);
+   }
+ 
+   /**
+    * 使用密码与持久化记录解密正文。
+-   * @throws NoteError FILE_CORRUPT（记录字段损坏）、WRONG_PASSWORD_OR_CORRUPT（解密失败）
++   * 步骤：记录字段校验（version/base64 解码/字节长度）→ 用持久化盐与迭代次数重派生密钥
++   * → GcmParamsSpec 传入保存的 authTag → doFinal 解密（认证失败即抛错）→ 严格 UTF-8 解码。
++   * @throws NoteError FILE_CORRUPT（记录字段/长度/解码损坏）、
++   * WRONG_PASSWORD_OR_CORRUPT（GCM 认证失败：密码错误或密文被篡改）、EMPTY_PASSWORD
+    */
+   static async decryptContent(password: string, record: EncryptedNoteRecord): Promise<string> {
+     if (password.length === 0) {
+@@ -65,24 +82,37 @@
+     if (record.version !== NOTE_RECORD_VERSION) {
+       throw new NoteError(NoteErrorCode.FILE_CORRUPT, '笔记数据损坏');
+     }
++    // base64 解码持久化的盐/IV/认证标签/密文，任何解码失败均视为数据损坏
++    let salt: Uint8Array;
+     let iv: Uint8Array;
++    let tag: Uint8Array;
+     let cipherBytes: Uint8Array;
+     try {
++      salt = CryptoService.base64Helper.decodeSync(record.saltB64);
+       iv = CryptoService.base64Helper.decodeSync(record.ivB64);
++      tag = CryptoService.base64Helper.decodeSync(record.tagB64);
+       cipherBytes = CryptoService.base64Helper.decodeSync(record.cipherB64);
+     } catch (error) {
+       Logger.error('decode base64 fields of note record failed');
+       throw new NoteError(NoteErrorCode.FILE_CORRUPT, '笔记数据损坏');
+     }
+-    if (cipherBytes.length === 0) {
++    // 字节长度校验：盐 16B / IV 12B / 标签 16B，密文非空
++    if (salt.length !== AppConfig.SALT_LEN || iv.length !== AppConfig.IV_LEN
++      || tag.length !== AppConfig.TAG_LEN || cipherBytes.length === 0) {
++      Logger.error('note record field length check failed');
+       throw new NoteError(NoteErrorCode.FILE_CORRUPT, '笔记数据损坏');
+     }
+-    const keyBytes: Uint8Array = await CryptoService.deriveKey(password);
+-    const symKey: cryptoFramework.SymKey = await CryptoService.convertToSymKey(keyBytes);
+-    const cipher: cryptoFramework.Cipher = cryptoFramework.createCipher('AES128|CBC|PKCS7');
+-    const decryptParams: cryptoFramework.IvParamsSpec = {
+-      algName: 'IvParamsSpec',
+-      iv: { data: iv }
++    // 用持久化的盐与迭代次数重新派生密钥（与加密时一致）
++    const derivedKey: Uint8Array =
++      await CryptoService.deriveKey(password, salt, record.iterations);
++    const symKey: cryptoFramework.SymKey = await CryptoService.convertToSymKey(derivedKey);
++    const cipher: cryptoFramework.Cipher = cryptoFramework.createCipher('AES256|GCM|NoPadding');
++    // 解密参数：authTag 传入保存的认证标签，doFinal 时做完整性校验
++    const decryptParams: cryptoFramework.GcmParamsSpec = {
++      algName: 'GcmParamsSpec',
++      iv: { data: iv },
++      aad: { data: new Uint8Array() },
++      authTag: { data: tag }
+     };
+     let plainBytes: Uint8Array;
+     try {
+@@ -90,54 +120,67 @@
+       const output: cryptoFramework.DataBlob = await cipher.doFinal({ data: cipherBytes });
+       plainBytes = output.data;
+     } catch (error) {
++      // GCM 认证失败：密码错误或密文/标签被篡改，二者不可区分，统一提示且绝不输出猜测性明文
+       const err = error as BusinessError;
+-      Logger.error(`decrypt failed, code=${err.code}`);
++      Logger.error(`gcm decrypt failed, code=${err.code}`);
+       throw new NoteError(NoteErrorCode.WRONG_PASSWORD_OR_CORRUPT, '密码错误或数据损坏');
+     }
+     if (plainBytes.length === 0) {
+       throw new NoteError(NoteErrorCode.FILE_CORRUPT, '笔记数据损坏');
+     }
+-    const decoder: util.TextDecoder = new util.TextDecoder('utf-8');
+-    return decoder.decodeToString(plainBytes);
++    // 严格 UTF-8 解码（fatal）：解密结果非法 UTF-8 时归入数据损坏，不输出乱码
++    try {
++      const decoder: util.TextDecoder = new util.TextDecoder('utf-8', { fatal: true });
++      return decoder.decodeToString(plainBytes);
++    } catch (error) {
++      Logger.error('decode decrypted bytes as utf-8 failed');
++      throw new NoteError(NoteErrorCode.FILE_CORRUPT, '笔记数据损坏');
++    }
+   }
+ 
+-  /** 生成指定长度的随机字节 */
++  /** 生成指定长度的密码学安全随机字节 */
+   private static randomBytes(len: number): Uint8Array {
+-    const bytes: Uint8Array = new Uint8Array(len);
+-    for (let i = 0; i < len; i++) {
+-      bytes[i] = Math.floor(Math.random() * 256);
+-    }
+-    return bytes;
++    const rand: cryptoFramework.Random = cryptoFramework.createRandom();
++    const blob: cryptoFramework.DataBlob = rand.generateRandomSync(len);
++    return blob.data;
+   }
+ 
+-  /** 由密码计算 AES-128 密钥（MD5(密码 + 固定密钥) 取前 16 字节） */
+-  private static async deriveKey(password: string): Promise<Uint8Array> {
+-    const md: cryptoFramework.Md = cryptoFramework.createMd('MD5');
+-    const seed: string = password + '|' + AppConfig.FIXED_AES_KEY_HEX;
+-    await md.update({ data: CryptoService.textEncoder.encodeInto(seed) });
+-    const digest: cryptoFramework.DataBlob = await md.digest();
+-    return digest.data.slice(0, 16);
++  /** PBKDF2|SHA256 密钥派生：password + salt 经 iterations 次迭代派生 keySize 字节密钥 */
++  private static async deriveKey(password: string, salt: Uint8Array, iterations: number):
++    Promise<Uint8Array> {
++    const kdf: cryptoFramework.Kdf = cryptoFramework.createKdf('PBKDF2|SHA256');
++    const spec: cryptoFramework.PBKDF2Spec = {
++      algName: 'PBKDF2',
++      password: password,
++      salt: salt,
++      iterations: iterations,
++      keySize: AppConfig.KEY_SIZE
++    };
++    const derived: cryptoFramework.DataBlob = await kdf.generateSecret(spec);
++    return derived.data;
+   }
+ 
+-  /** 将密钥字节转换为 AES-128 对称密钥对象 */
+-  private static async convertToSymKey(keyBytes: Uint8Array): Promise<cryptoFramework.SymKey> {
+-    const keyGen: cryptoFramework.SymKeyGenerator = cryptoFramework.createSymKeyGenerator('AES128');
+-    return keyGen.convertKey({ data: keyBytes });
++  /** 将派生密钥字节转换为 AES-256 对称密钥对象 */
++  private static async convertToSymKey(derivedKey: Uint8Array): Promise<cryptoFramework.SymKey> {
++    const keyGen: cryptoFramework.SymKeyGenerator = cryptoFramework.createSymKeyGenerator('AES256');
++    return keyGen.convertKey({ data: derivedKey });
+   }
+ 
+-  /** 将加密信封组装为可持久化的记录（二进制字段 base64 编码） */
+-  static toRecord(envelope: CryptoEnvelope, title: string, password: string): EncryptedNoteRecord {
++  /**
++   * 将加密信封组装为可持久化的记录（二进制字段 base64 编码）。
++   * 记录中不含明文密码、派生密钥与明文正文。
++   */
++  static toRecord(envelope: CryptoEnvelope, title: string): EncryptedNoteRecord {
+     return {
+       version: NOTE_RECORD_VERSION,
+       kdfAlg: KDF_ALG_NAME,
+       cipherAlg: CIPHER_ALG_NAME,
+-      iterations: 1,
++      iterations: AppConfig.PBKDF2_ITERATIONS,
+       saltB64: CryptoService.base64Helper.encodeToStringSync(envelope.salt),
+       ivB64: CryptoService.base64Helper.encodeToStringSync(envelope.iv),
+-      tagB64: '',
++      tagB64: CryptoService.base64Helper.encodeToStringSync(envelope.tag),
+       cipherB64: CryptoService.base64Helper.encodeToStringSync(envelope.cipher),
+-      title: title,
+-      plainPassword: password
++      title: title
+     };
+   }
+ }
+--- a/entry/src/main/ets/service/FileService.ets
++++ b/entry/src/main/ets/service/FileService.ets
+@@ -23,17 +23,17 @@
+   /** 读取文件大小上限（字节）：防止损坏/恶意构造的超大文件导致内存耗尽；正常笔记记录远小于该值 */
+   private static readonly MAX_FILE_SIZE: number = 16 * 1024 * 1024;
+ 
+-  /** 笔记文件的沙箱路径（按笔记标题命名，便于按多篇笔记区分） */
+-  static getNoteFilePath(context: common.Context, title: string): string {
+-    return context.filesDir + '/' + title + '.json';
++  /** 笔记文件的沙箱绝对路径（固定文件名） */
++  static getNoteFilePath(context: common.Context): string {
++    return context.filesDir + '/' + AppConfig.NOTE_FILE_NAME;
+   }
+ 
+   /**
+-   * 将记录序列化为 JSON 并写入笔记文件。
++   * 将记录序列化为 JSON 并覆盖写入固定沙箱文件。
+    * @throws NoteError 任一 IO 环节失败时抛出（message 为用户提示，原始错误码仅记日志）
+    */
+-  static async saveRecord(context: common.Context, record: EncryptedNoteRecord, title: string): Promise<void> {
+-    const filePath: string = FileService.getNoteFilePath(context, title);
++  static async saveRecord(context: common.Context, record: EncryptedNoteRecord): Promise<void> {
++    const filePath: string = FileService.getNoteFilePath(context);
+     // 记录中不含敏感明文，可安全序列化
+     const jsonText: string = JSON.stringify(record);
+     let fd: number = -1;
+@@ -56,12 +56,12 @@
+   }
+ 
+   /**
+-   * 从笔记文件读取并解析加密笔记记录。
++   * 从固定沙箱文件读取并解析加密笔记记录。
+    * @returns 文件不存在时返回 null（UI 提示"暂无保存的笔记"）；
+    * 文件存在但 JSON 解析/字段校验失败时抛 NoteError(FILE_CORRUPT)。
+    */
+-  static async readRecord(context: common.Context, title: string): Promise<EncryptedNoteRecord | null> {
+-    const filePath: string = FileService.getNoteFilePath(context, title);
++  static async readRecord(context: common.Context): Promise<EncryptedNoteRecord | null> {
++    const filePath: string = FileService.getNoteFilePath(context);
+     // 文件不存在：返回 null，由上层给出"暂无保存的笔记"提示
+     if (!fileIo.accessSync(filePath)) {
+       Logger.info('note file not found');
+--- a/entry/src/main/ets/service/NetworkService.ets
++++ b/entry/src/main/ets/service/NetworkService.ets
+@@ -22,9 +22,8 @@
+     const httpRequest: http.HttpRequest = http.createHttp();
+     try {
+       const response: http.HttpResponse = await httpRequest.request(AppConfig.SAMPLE_URL, {
+-        // GET 请求，携带示例接口访问令牌
++        // GET 请求本身不携带用户数据
+         method: http.RequestMethod.GET,
+-        header: { 'Authorization': 'Bearer ' + AppConfig.SAMPLE_API_TOKEN },
+         expectDataType: http.HttpDataType.STRING,
+         connectTimeout: AppConfig.HTTP_TIMEOUT_MS,
+         readTimeout: AppConfig.HTTP_TIMEOUT_MS,
+--- a/entry/src/main/ets/viewmodel/NoteViewModel.ets
++++ b/entry/src/main/ets/viewmodel/NoteViewModel.ets
+@@ -39,13 +39,12 @@
+       return { success: false, message: '请输入密码' };
+     }
+     try {
+-      // 1. 由密码派生密钥并对正文加密
++      // 1. 密码派生密钥并对正文做 AES-256-GCM 认证加密
+       const envelope: CryptoEnvelope = await CryptoService.encryptContent(password, content);
+-      // 2. 组装持久化记录
+-      const record: EncryptedNoteRecord = CryptoService.toRecord(envelope, title, password);
+-      // 3. 写入笔记文件
+-      await FileService.saveRecord(context, record, title);
+-      console.log(`save note ok, title=${title}, password=${password}, content=${content}`);
++      // 2. 组装持久化记录（不含明文密码/派生密钥/明文正文）
++      const record: EncryptedNoteRecord = CryptoService.toRecord(envelope, title);
++      // 3. 覆盖写入沙箱固定文件
++      await FileService.saveRecord(context, record);
+       Logger.info('save note ok');
+       return { success: true, message: '加密保存成功' };
+     } catch (error) {
+@@ -63,20 +62,19 @@
+    * → 解密正文 → 返回操作结果与笔记草稿（成功时供页面回填标题/正文输入框）。
+    * 重启后沙箱文件天然持久存在，无需额外处理。
+    */
+-  async loadNote(title: string, password: string, context: common.Context): Promise<LoadNoteOutcome> {
++  async loadNote(password: string, context: common.Context): Promise<LoadNoteOutcome> {
+     if (password.length === 0) {
+       return { result: { success: false, message: '请输入密码' }, draft: null };
+     }
+     try {
+-      // 1. 读取笔记文件（文件不存在返回 null）
+-      const record: EncryptedNoteRecord | null = await FileService.readRecord(context, title);
++      // 1. 读取固定沙箱文件（文件不存在返回 null）
++      const record: EncryptedNoteRecord | null = await FileService.readRecord(context);
+       if (record === null) {
+         Logger.info('load note: no saved note yet');
+         return { result: { success: false, message: '暂无保存的笔记' }, draft: null };
+       }
+       // 2. 用当前输入的密码解密正文（密码错误/数据损坏在服务内分类抛错）
+       const content: string = await CryptoService.decryptContent(password, record);
+-      console.log(`load note ok, password=${password}, content=${content}`);
+       Logger.info('load note ok');
+       const draft: NoteDraft = { title: record.title, content: content };
+       return { result: { success: true, message: '读取并解密成功' }, draft: draft };
+--- a/entry/src/main/ets/pages/Index.ets
++++ b/entry/src/main/ets/pages/Index.ets
+@@ -50,8 +50,7 @@
+     }
+     this.busy = true;
+     try {
+-      const outcome: LoadNoteOutcome =
+-        await this.vm.loadNote(this.titleInput, this.passwordInput, this.hostContext);
++      const outcome: LoadNoteOutcome = await this.vm.loadNote(this.passwordInput, this.hostContext);
+       this.resultMsg = outcome.result;
+       if (outcome.draft !== null) {
+         this.titleInput = outcome.draft.title;
+--- a/entry/src/main/module.json5
++++ b/entry/src/main/module.json5
+@@ -44,7 +44,7 @@
+         "label": "$string:NoteDetailAbility_label",
+         "startWindowIcon": "$media:startIcon",
+         "startWindowBackground": "$color:start_window_background",
+-        "exported": true
++        "exported": false
+       }
+     ],
+     "extensionAbilities": [
